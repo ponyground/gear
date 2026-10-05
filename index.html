@@ -10217,6 +10217,8 @@ async function load() {
   S.view = 'loading'; render();
   try {
     D = await apiGet('bootstrap');
+    if (!D.version) throw new Error('Apps Script가 예전 버전이에요. Apps Script에서 새 코드 붙여넣고 [배포 관리 → 편집 → 새 버전]으로 배포해줘.');
+    D.events = D.events || []; D.today = D.today || new Date().toISOString().slice(0, 10);
     G = {}; BAG_OF_CASE = {};
     D.gear.forEach(g => { G[g.id] = g; if (g.cat === '가방' && g.box) BAG_OF_CASE[g.box] = g.id; });
     const saved = store.get('shoot', null);
@@ -10505,7 +10507,8 @@ function renderPick() {
     '<div style="margin-top:16px">' +
     todays.map(s => '<button class="opt" data-sid="' + s.id + '"><span>' + esc(s.name) + '</span><span class="lab">' + ({ ready: 'READY', out: 'OUT', done: 'DONE' }[shootStatus(s)]) + '</span></button>').join('') +
     evs.map((e, i) => '<button class="opt" data-ev="' + i + '"><span>' + esc(e.title) + '</span><span class="lab">' + (e.allDay ? 'ALL DAY' : e.start) + '</span></button>').join('') +
-    (todays.length + evs.length === 0 ? '<div class="sub">오늘 캘린더에 일정이 없어요</div>' : '') +
+    (D.eventsError ? '<div class="err">캘린더를 못 읽었어요: ' + esc(D.eventsError) + '<br>Apps Script 편집기에서 authorize 함수를 한 번 실행해서 권한을 허용해줘.</div>' : '') +
+    (todays.length + evs.length === 0 && !D.eventsError ? '<div class="sub">오늘 캘린더에 일정이 없어요</div>' : '') +
     '</div>' +
     '<div class="lab" style="margin-top:24px">직접 입력</div>' +
     '<div style="display:flex;gap:8px;margin-top:8px"><input type="text" id="nm" placeholder="촬영명"><button class="cta" style="width:auto;min-height:0;padding:0 18px" id="mk">추가</button></div>' +
