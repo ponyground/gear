@@ -10322,13 +10322,23 @@ function onCode(raw) {
 }
 
 /* ---------- 출발 ---------- */
-function newDepart() {
-  return { bags: [], cur: null, assigned: {}, order: [], lastMsg: '' };   // assigned: 장비id -> 가방id|''
+function newDepart(prefill) {
+  const s = { bags: [], cur: null, assigned: {}, order: [], lastMsg: '', add: !!prefill, prior: {} };   // assigned: 장비id -> 가방id|''
+  if (prefill) {
+    recs(S.shoot.id, '출발').forEach(r => {
+      s.prior[r.gearId] = true;
+      if (isBag(r.gearId)) { if (!s.bags.includes(r.gearId)) s.bags.push(r.gearId); }
+      else if (G[r.gearId] && (G[r.gearId].tag || !r.bag || !contentsOf(r.bag).some(g => g.id === r.gearId))) s.assigned[r.gearId] = r.bag || '';
+    });
+    s.lastMsg = '이미 챙긴 장비는 체크돼 있어요. 추가할 것만 찍으면 돼요';
+  }
+  return s;
 }
 function departScan(id) {
   const s = S.sess;
   if (isBag(id)) {
     const fresh = !s.bags.includes(id);
+    (s.hist = s.hist || []).push({ kind: 'bag', id, fresh, prevCur: s.cur });
     if (fresh) s.bags.push(id);
     s.cur = id;
     scanner.beep(true);
@@ -10339,6 +10349,7 @@ function departScan(id) {
     const bag = home && s.bags.includes(home) ? home : (s.cur || '');
     s.assigned[id] = bag;
     s.order.push(id);
+    (s.hist = s.hist || []).push({ kind: 'item', id });
     scanner.beep(true);
     flashMsg('<b>' + esc(name(id)) + '</b> → ' + esc(bagName(bag)), true);
   }
@@ -10360,25 +10371,79 @@ function departModel() {
   const all = groups.flatMap(g => g.items).concat(loose);
   return { groups, loose, total: all.length, done: all.filter(i => i.ok).length, left: all.filter(i => !i.ok) };
 }
+// QR/NFC 없이 직접 체크 (가방에 이미 넣은 경우)
+function manualDepart(id, bag) {
+  const s = S.sess;
+  s.assigned[id] = bag || ''; s.order.push(id);
+  (s.manual = s.manual || {})[id] = true;
+  (s.hist = s.hist || []).push({ kind: 'item', id });
+  flashMsg('직접 체크 · <b>' + esc(name(id)) + '</b>', true); render();
+}
+function manualReturn(id) {
+  const s = S.sess;
+  (s.hist = s.hist || []).push({ before: Object.assign({}, s.back), manualBefore: Object.assign({}, s.manual || {}) });
+  s.back[id] = true; (s.manual = s.manual || {})[id] = true;
+  if (isBag(id)) s.expected.filter(e => e.bag === id && G[e.id] && !G[e.id].tag).forEach(e => { s.back[e.id] = true; });
+  flashMsg('직접 체크 · <b>' + esc(isBag(id) ? bagName(id) : name(id)) + '</b>', true); render();
+}
+
+// 방금 찍은 것 취소 (출발·철수 공통)
+function undoLast() {
+  const s = S.sess, h = (s.hist || []).pop();
+  if (!h) { toast('취소할 스캔이 없어요'); return; }
+  if (S.view === 'return') { s.back = h.before; if (h.manualBefore) s.manual = h.manualBefore; flashMsg('방금 체크 취소', true); render(); return; }
+  if (h.kind === 'item') { removeItem(h.id); if (s.manual) delete s.manual[h.id]; flashMsg('취소 · <b>' + esc(name(h.id)) + '</b>', true); }
+  else { if (h.fresh) dropBag(h.id); s.cur = h.prevCur && s.bags.includes(h.prevCur) ? h.prevCur : (s.bags[s.bags.length - 1] || null); flashMsg('취소 · <b>' + esc(bagName(h.id)) + '</b>', true); }
+  render();
+}
+function removeItem(id) {
+  const s = S.sess;
+  if (s.prior[id]) { toast('이미 저장된 장비는 여기서 뺄 수 없어요'); return false; }
+  delete s.assigned[id]; s.order = s.order.filter(i => i !== id);
+  if (s.hist) s.hist = s.hist.filter(h => !(h.kind === 'item' && h.id === id));
+  return true;
+}
+function dropBag(b) {
+  const s = S.sess;
+  if (s.prior[b]) { toast('이미 저장된 가방은 여기서 뺄 수 없어요'); return false; }
+  s.bags = s.bags.filter(x => x !== b);
+  Object.keys(s.assigned).forEach(i => { if (s.assigned[i] === b) s.assigned[i] = ''; });   // 안에 넣었던 장비는 "가방 없이"로
+  if (s.cur === b) s.cur = s.bags[s.bags.length - 1] || null;
+  if (s.hist) s.hist = s.hist.filter(h => h.id !== b);
+  return true;
+}
+function bagMenu(b) {
+  const s = S.sess;
+  openSheet('<div class="lab">가방</div><h1 style="font-size:22px">' + esc(bagName(b)) + '</h1>' +
+    (s.cur !== b ? '<button class="opt" data-cur="1">현재 가방으로 만들기</button>' : '') +
+    '<button class="opt" data-drop="1" style="color:var(--sigtext)">이 가방 스캔 취소</button>' +
+    '<div class="sub" style="margin-top:8px">취소하면 이 가방에 넣은 추가 장비는 "가방 없이"로 옮겨져요.</div>', el => {
+      const c = el.querySelector('[data-cur]'); if (c) c.onclick = () => { s.cur = b; closeSheet(); render(); };
+      el.querySelector('[data-drop]').onclick = () => { if (dropBag(b)) toast(bagName(b) + ' 취소'); closeSheet(); render(); };
+    });
+}
 function moveItem(id) {
   const s = S.sess;
   const opts = [''].concat(s.bags);
   openSheet('<div class="lab">가방 옮기기</div><h1 style="font-size:22px">' + esc(name(id)) + '</h1>' +
     opts.map(b => '<button class="opt' + (s.assigned[id] === b ? ' sel' : '') + '" data-mv="' + b + '">' + esc(bagName(b)) + '</button>').join('') +
-    '<button class="opt" data-rm="1" style="color:var(--sigtext)">이 장비 빼기</button>', el => {
+    '<button class="opt" data-rm="1" style="color:var(--sigtext)">스캔 취소 (이 장비 빼기)</button>', el => {
       el.querySelectorAll('[data-mv]').forEach(x => x.onclick = () => { s.assigned[id] = x.dataset.mv; closeSheet(); render(); });
-      el.querySelector('[data-rm]').onclick = () => { delete s.assigned[id]; s.order = s.order.filter(i => i !== id); closeSheet(); render(); };
+      el.querySelector('[data-rm]').onclick = () => { if (removeItem(id)) toast(name(id) + ' 취소'); closeSheet(); render(); };
     });
 }
 
 /* ---------- 철수 ---------- */
 function newReturn() {
   const dep = recs(S.shoot.id, '출발');
-  return { expected: dep.map(r => ({ id: r.gearId, bag: r.bag })), back: {}, extra: [], lastMsg: '' };
+  const uniq = {}; dep.forEach(r => { uniq[r.gearId] = r.bag; });   // 같은 장비가 두 번 기록돼도 1번만
+  return { expected: Object.keys(uniq).map(id => ({ id, bag: uniq[id] })), back: {}, extra: [], lastMsg: '' };
 }
 function returnScan(id) {
   const s = S.sess;
   const exp = s.expected.find(e => e.id === id);
+  const before = Object.assign({}, s.back);
+  if (exp) (s.hist = s.hist || []).push({ before });
   if (isBag(id) && exp) {
     s.back[id] = true;
     s.expected.filter(e => e.bag === id && G[e.id] && !G[e.id].tag).forEach(e => { s.back[e.id] = true; });
@@ -10411,19 +10476,28 @@ async function finish(type, force) {
     items = s.bags.map(b => ({ id: b, bag: b }));
     m.groups.forEach(g => g.items.filter(i => i.ok).forEach(i => items.push({ id: i.id, bag: g.bag })));
     m.loose.forEach(i => items.push({ id: i.id, bag: '' }));
-    summary = '가방 ' + s.bags.length + '개 · 장비 ' + m.done + '개 챙김';
-    if (m.left.length) { summary += '\n두고 출발: ' + m.left.map(i => name(i.id)).join(', '); }
+    const added = items.filter(i => !s.prior[i.id]).map(i => name(i.id));
+    if (s.add) {
+      if (!added.length) { toast('새로 추가한 장비가 없어요'); return; }
+      summary = '추가 ' + added.length + '개: ' + added.join(', ') + '\n총 장비 ' + m.done + '개';
+    } else {
+      summary = '가방 ' + s.bags.length + '개 · 장비 ' + m.done + '개 챙김';
+      if (m.left.length) { summary += '\n두고 출발: ' + m.left.map(i => name(i.id)).join(', '); }
+    }
+    const man = Object.keys(s.manual || {}); if (man.length) summary += '\n직접 체크 ' + man.length + '개: ' + man.map(name).join(', ');
   } else {
     const m = returnModel(), s = S.sess;
     items = s.expected.filter(e => s.back[e.id]).map(e => ({ id: e.id, bag: e.bag }));
     if (m.miss.length) { alert = true; summary = '⚠ 못 찾은 장비 ' + m.miss.length + '개: ' + m.miss.map(e => name(e.id) + '(' + bagName(e.bag) + ')').join(', '); }
     else summary = '출발한 장비 ' + m.total + '개 전부 회수 · 0 MISSING';
+    const man = Object.keys(s.manual || {}).filter(i => s.back[i]); if (man.length) summary += '\n직접 체크 ' + man.length + '개: ' + man.map(i => isBag(i) ? bagName(i) : name(i)).join(', ');
   }
   S.saving = true; render();
   try {
     await apiPost({ action: 'finish', shootId: S.shoot.id, type, items, who, summary, alert, noNotify: true });
-    const sent = await pushNotify(S.shoot.name + ' ' + type + ' 완료 · ' + who, summary, type, alert);
-    toast(type + ' 완료 · ' + (sent === true ? '알림 보냄' : '알림 실패 (' + sent + ')'));
+    const label = type === '출발' && S.sess.add ? '출발 장비 추가' : type + ' 완료';
+    const sent = await pushNotify(S.shoot.name + ' ' + label + ' · ' + who, summary, type, alert);
+    toast(label + ' · ' + (sent === true ? '알림 보냄' : '알림 실패 (' + sent + ')'));
     S.saving = false; S.sess = null;
     scanner.stop(); S.nfcOn = false;
     await load();
@@ -10477,7 +10551,7 @@ function renderHome() {
   let cta = '', status = '';
   if (st === 'none') { status = '오늘 촬영을 골라주세요'; cta = '<button class="cta" id="go"><span>촬영 고르기</span>' + arrow() + '</button>'; }
   else if (st === 'ready') { status = '출발 전'; cta = '<button class="cta" id="go"><span>출발 체크 시작</span>' + arrow() + '</button>'; }
-  else if (st === 'out') { status = '촬영 중 · ' + recs(sh.id, '출발').filter(r => !isBag(r.gearId)).length + '개 출발'; cta = '<button class="cta" id="go"><span>철수 체크 시작</span>' + arrow() + '</button>'; }
+  else if (st === 'out') { status = '촬영 중 · ' + recs(sh.id, '출발').filter(r => !isBag(r.gearId)).length + '개 출발'; cta = '<button class="cta soft" id="addmore" style="margin-bottom:8px"><span>+ 출발 장비 추가</span><small>철수 전까지 가능</small></button><button class="cta" id="go"><span>철수 체크 시작</span>' + arrow() + '</button>'; }
   else { const m = missingOf(sh); status = '철수 완료 · ' + (m.length ? m.length + '개 못 찾음' : '0 MISSING'); cta = '<button class="cta soft" id="pick2"><span>다른 촬영 고르기</span></button>'; }
   $app.innerHTML = topbar('<button class="chip" id="whoBtn"><span class="dot"></span>GEAR · ' + esc(S.who) + '</button>') +
     '<div class="lab" style="margin-top:32px">' + dow + ' ' + D.today.slice(5).replace('-', '.') + ' · TODAY</div>' +
@@ -10498,6 +10572,8 @@ function renderHome() {
     if (st === 'ready') { S.sess = newDepart(); S.view = 'depart'; render(); startCam(); }
     if (st === 'out') { S.sess = newReturn(); S.view = 'return'; render(); startCam(); }
   };
+  const am = document.getElementById('addmore');
+  if (am) am.onclick = () => { S.sess = newDepart(true); S.view = 'depart'; render(); startCam(); };
   const g = document.getElementById('go'); if (g) g.onclick = go;
   const z = document.getElementById('zone'); if (z) z.onclick = go;
   const p = document.getElementById('pick'); if (p) p.onclick = () => { S.view = 'pick'; render(); };
@@ -10543,14 +10619,15 @@ function renderPick() {
 function scanBar(defaultMsg) {
   const nfc = 'NDEFReader' in window;
   return '<div class="scanbar" id="sbar"><video id="cam" playsinline muted></video><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:4px;background:var(--sig)"></span><span class="lab" style="color:#fff;font-size:10px">SCANNING' + (S.nfcOn ? ' · NFC' : '') + '</span></div><div class="msg" id="smsg">' + (S.sess.lastMsg || defaultMsg) + '</div></div>' +
-    (nfc && !S.nfcOn ? '<button class="pill line" id="nfc" style="color:#fff;border-color:#fff">NFC</button>' : '') + '</div>';
+    '<div style="display:flex;flex-direction:column;gap:6px">' + (nfc && !S.nfcOn ? '<button class="pill line" id="nfc" style="color:#fff;border-color:#fff">NFC</button>' : '') +
+    '<button class="pill line" id="undo" style="color:#fff;border-color:#fff" aria-label="방금 스캔 취소">취소</button></div></div>';
 }
 
 function renderDepart() {
   const m = departModel(), s = S.sess;
   const segN = Math.max(m.total, 1);
-  $app.innerHTML = topbar('<button class="chip" id="back">← DEPARTURE 01/02</button>') +
-    '<div class="row" style="margin-top:20px;align-items:flex-end"><div><div class="sub" style="margin:0">짐 싸는 중 · ' + esc(S.shoot.name) + '</div>' +
+  $app.innerHTML = topbar('<button class="chip" id="back">← ' + (s.add ? 'ADD MORE' : 'DEPARTURE 01/02') + '</button>') +
+    '<div class="row" style="margin-top:20px;align-items:flex-end"><div><div class="sub" style="margin:0">' + (s.add ? '추가로 챙기는 중' : '짐 싸는 중') + ' · ' + esc(S.shoot.name) + '</div>' +
     '<div style="display:flex;align-items:baseline;gap:4px;margin-top:2px"><span class="big" style="font-size:88px">' + m.done + '</span><span class="big" style="font-size:30px;color:var(--soft);font-weight:800">/' + m.total + '</span></div></div>' +
     '<div class="lab" style="color:' + (m.left.length ? 'var(--sigtext)' : 'var(--ink)') + ';padding-bottom:8px">' + (m.left.length ? m.left.length + ' LEFT' : (m.total ? 'ALL SET' : 'START')) + '</div></div>' +
     '<div class="seg" style="grid-template-columns:repeat(' + segN + ',minmax(0,1fr))">' + Array.from({ length: segN }, (_, i) => '<span class="' + (i < m.done ? 'on' : '') + '"></span>').join('') + '</div>' +
@@ -10558,9 +10635,9 @@ function renderDepart() {
     '<div class="stack" style="margin-top:14px">' +
     m.groups.map(g => {
       const left = g.items.filter(i => !i.ok).length;
-      return '<div class="card' + (s.cur === g.bag ? ' curbag' : '') + '"><div class="row"><div><div style="font-size:17px;font-weight:700">' + esc(bagName(g.bag)) + (s.cur === g.bag ? ' <span class="lab" style="font-size:9px">· 현재 가방</span>' : '') + '</div><div style="font-size:13px;color:var(--mute);margin-top:2px">' + g.items.length + '개</div></div>' +
+      return '<div class="card' + (s.cur === g.bag ? ' curbag' : '') + '"><div class="row"><button data-bag="' + g.bag + '" style="text-align:left"><div style="font-size:17px;font-weight:700">' + esc(bagName(g.bag)) + (s.cur === g.bag ? ' <span class="lab" style="font-size:9px">· 현재 가방</span>' : '') + '</div><div style="font-size:13px;color:var(--mute);margin-top:2px">' + g.items.length + '개 · 탭해서 취소/선택</div></button>' +
         (left ? '<span class="pill left">' + left + ' LEFT</span>' : '<span class="pill done">DONE</span>') + '</div>' +
-        (g.items.length ? '<div style="margin-top:10px">' + g.items.filter(i => !i.auto).map(i => itemRow(i)).join('') +
+        (g.items.length ? '<div style="margin-top:10px">' + g.items.filter(i => !i.auto).map(i => itemRow(i, g.bag)).join('') +
           (g.items.some(i => i.auto) ? '<div class="item ok"><span class="box on">' + chk() + '</span><span class="t">태그 없는 장비 ' + g.items.filter(i => i.auto).length + '개</span><span class="tagx">가방과 함께</span></div>' : '') + '</div>' : '') +
         '</div>';
     }).join('') +
@@ -10568,18 +10645,20 @@ function renderDepart() {
     (!m.groups.length && !m.loose.length ? '<div class="card" style="color:var(--mute);font-size:14px">아직 찍은 게 없어요</div>' : '') +
     '</div><div class="grow"></div>' +
     (m.left.length
-      ? '<button class="cta soft" id="fin"><span>' + (S.saving ? '저장 중…' : m.left.length + '개 남음 · 이대로 출발') + '</span><small>TAP</small></button>'
-      : '<button class="cta" id="fin"' + (m.total ? '' : ' disabled') + '><span>' + (S.saving ? '저장 중…' : '출발 완료') + '</span>' + arrow() + '</button>');
+      ? '<button class="cta soft" id="fin"><span>' + (S.saving ? '저장 중…' : m.left.length + '개 남음 · ' + (s.add ? '추가 저장' : '이대로 출발')) + '</span><small>TAP</small></button>'
+      : '<button class="cta" id="fin"' + (m.total ? '' : ' disabled') + '><span>' + (S.saving ? '저장 중…' : (s.add ? '추가 저장' : '출발 완료')) + '</span>' + arrow() + '</button>');
   bindCheckCommon();
-  $app.querySelectorAll('[data-it]').forEach(b => b.onclick = () => { if (S.sess.assigned[b.dataset.it] !== undefined) moveItem(b.dataset.it); });
+  $app.querySelectorAll('[data-it]').forEach(b => b.onclick = () => { const id = b.dataset.it;
+    if (S.sess.assigned[id] === undefined) { manualDepart(id, b.dataset.in); return; } if (S.sess.prior[id]) { toast('이미 저장된 장비예요'); return; } moveItem(id); });
+  $app.querySelectorAll('[data-bag]').forEach(b => b.onclick = () => { if (S.sess.prior[b.dataset.bag]) { toast('이미 저장된 가방이에요'); return; } bagMenu(b.dataset.bag); });
   document.getElementById('fin').onclick = () => {
     if (S.saving || !m.total) return;
-    if (m.left.length) confirmSheet(m.left.length + '개를 두고 출발할까?', m.left.map(i => name(i.id)).join(', '), '이대로 출발', () => finish('출발'));
+    if (m.left.length && !s.add) confirmSheet(m.left.length + '개를 두고 출발할까?', m.left.map(i => name(i.id)).join(', '), '이대로 출발', () => finish('출발'));
     else finish('출발');
   };
 }
-function itemRow(i) {
-  return '<button class="item' + (i.ok ? ' ok' : '') + '" data-it="' + i.id + '"><span class="box' + (i.ok ? ' on' : '') + '">' + (i.ok ? chk() : '') + '</span><span class="t">' + esc(name(i.id)) + '</span>' + (i.extra ? '<span class="tagx">+ 추가 · 옮기기</span>' : '') + '</button>';
+function itemRow(i, bag) {
+  return '<button class="item' + (i.ok ? ' ok' : '') + '" data-it="' + i.id + '" data-in="' + (bag || '') + '"><span class="box' + (i.ok ? ' on' : '') + '">' + (i.ok ? chk() : '') + '</span><span class="t">' + esc(name(i.id)) + '</span>' + (i.ok && S.sess.assigned[i.id] !== undefined && !S.sess.prior[i.id] ? '<span class="tagx">' + (i.extra ? '+ 추가 · ' : '') + '탭: 취소</span>' : '') + (!i.ok ? '<span class="tagx">탭: 직접 체크</span>' : '') + (S.sess.manual && S.sess.manual[i.id] ? '<span class="tagx">직접 체크</span>' : '') + '</button>';
 }
 function chk() { return '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2" aria-hidden="true"><path d="M2 6.5l2.5 2.5L10 3"></path></svg>'; }
 
@@ -10591,7 +10670,7 @@ function renderReturn() {
     scanBar('가방을 찍으면 태그 없는 장비는 같이 회수돼요') +
     (m.miss.length
       ? '<div class="missing"><div class="row" style="align-items:flex-end"><span class="big" style="font-size:80px">' + m.miss.length + '</span><span class="lab" style="color:var(--ink)">NOT SCANNED</span></div><div style="margin-top:10px;font-size:16px;font-weight:700">아직 안 찍힌 장비</div><div class="list" style="margin-top:10px">' +
-        m.miss.map(e => '<div><span style="font-weight:500">' + esc(name(e.id)) + '</span><span style="font-size:12px">' + esc(isBag(e.id) ? '가방' : bagName(e.bag)) + '</span></div>').join('') + '</div></div>'
+        m.miss.map(e => '<div><button data-man="' + e.id + '" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left;font-weight:500;font-size:15px"><span class="box" style="border-color:var(--ink)"></span>' + esc(name(e.id)) + '</button><span style="font-size:12px">' + esc(isBag(e.id) ? '가방' : bagName(e.bag)) + '</span></div>').join('') + '</div><div style="margin-top:10px;font-size:12px">이미 가방에 넣었으면 탭해서 직접 체크</div></div>'
       : '<div class="card" style="margin-top:20px"><div class="big" style="font-size:56px">0</div><div class="lab" style="margin-top:8px">MISSING · 전부 회수</div></div>') +
     '<div class="lab" style="margin-top:20px">CASES</div><div class="stack" style="margin-top:8px">' +
     m.groups.map(g => '<div class="card row" style="padding:15px 16px"><div style="font-size:16px;font-weight:700">' + esc(bagName(g.bag)) + '</div>' + (g.left ? '<span class="pill left">' + g.left + ' LEFT</span>' : '<span class="pill done">BACK</span>') + '</div>').join('') +
@@ -10600,6 +10679,7 @@ function renderReturn() {
       ? '<button class="cta soft" id="fin"><span>' + (S.saving ? '저장 중…' : m.miss.length + '개 찾아야 완료') + '</span><small>확인 후 완료</small></button>'
       : '<button class="cta" id="fin"><span>' + (S.saving ? '저장 중…' : '철수 완료') + '</span>' + arrow() + '</button>');
   bindCheckCommon();
+  $app.querySelectorAll('[data-man]').forEach(b => b.onclick = () => manualReturn(b.dataset.man));
   document.getElementById('fin').onclick = () => {
     if (S.saving) return;
     if (m.miss.length) confirmSheet(m.miss.length + '개를 못 찾은 채로 끝낼까?', '두 사람 모두에게 못 찾은 장비 알림이 가요.', '확인 후 완료', () => finish('철수'));
@@ -10611,6 +10691,7 @@ function bindCheckCommon() {
   document.getElementById('back').onclick = () => confirmSheet('체크를 그만둘까?', '지금까지 찍은 건 저장되지 않아요.', '그만두기', () => { S.sess = null; scanner.stop(); S.nfcOn = false; S.view = 'home'; render(); });
   const v = document.getElementById('cam'); if (v) scanner.attach(v);
   const n = document.getElementById('nfc'); if (n) n.onclick = () => scanner.startNfc();
+  const u = document.getElementById('undo'); if (u) u.onclick = undoLast;
 }
 async function startCam() { const v = document.getElementById('cam'); if (v) await scanner.start(v); }
 
