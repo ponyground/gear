@@ -10222,19 +10222,68 @@ async function apiPost(body) {
   return j;
 }
 
+function applyData(d) {
+  if (!d.version || d.version < 3) throw new Error('Apps Script가 예전 버전이에요. Apps Script에서 새 코드 붙여넣고 [배포 관리 → 편집 → 새 버전]으로 배포해줘.');
+  D = d; D.events = D.events || []; D.today = D.today || new Date().toISOString().slice(0, 10);
+  G = {}; BAG_OF_CASE = {};
+  D.gear.forEach(g => { G[g.id] = g; if (g.cat === '가방' && g.box) BAG_OF_CASE[g.box] = g.id; });
+}
+
+/* ---------- 같이 보기: 다른 폰이 완료하면 1~2초 안에 내 화면도 갱신 ----------
+   완료한 폰이 ntfy로 알림을 보내면, 켜져 있는 다른 폰의 앱이 같은 채널을 듣고 있다가 시트를 다시 읽음.
+   앱을 내리면(백그라운드) 연결을 끊어서 배터리를 쓰지 않고, 다시 보면 연결 + 최신 상태로 새로 읽음. */
+const DEVICE = store.get('device', null) || (() => { const id = Math.random().toString(36).slice(2, 10); store.set('device', id); return id; })();
+let live = null, refreshing = false;
+function liveOpen() {
+  if (live || !window.EventSource) return;
+  try {
+    live = new EventSource('https://ntfy.sh/' + NTFY_TOPIC + '/sse');
+    live.onmessage = ev => {
+      let m = {}; try { m = JSON.parse(ev.data); } catch (e) {}
+      if (m.event !== 'message') return;
+      if ((m.tags || []).includes('from-' + DEVICE)) return;   // 내가 보낸 알림은 무시
+      refresh(m.title || '');
+    };
+    live.onerror = () => { liveClose(); setTimeout(() => { if (!document.hidden) liveOpen(); }, 5000); };
+  } catch (e) { live = null; }
+}
+function liveClose() { if (live) { live.close(); live = null; } }
+async function refresh(why) {
+  if (refreshing || !D || S.view === 'loading' || S.view === 'error' || S.view === 'who') return;
+  refreshing = true;
+  try {
+    const before = S.shoot ? shootStatus(S.shoot) : null;
+    applyData(await apiGet('bootstrap'));
+    if (S.shoot) S.shoot = D.shoots.find(s => s.id === S.shoot.id) || S.shoot;
+    const after = S.shoot ? shootStatus(S.shoot) : null;
+    if (S.view === 'depart' || S.view === 'return') {
+      // 체크하는 도중 상대방이 먼저 완료한 경우
+      const doneByOther = (S.view === 'depart' && !S.sess.add && after !== 'ready') || (S.view === 'return' && after === 'done');
+      if (doneByOther && before !== after) {
+        confirmSheet((S.view === 'depart' ? '출발' : '철수') + '이 방금 완료됐어요', (why ? why + ' · ' : '') + '다른 폰에서 먼저 저장했어요. 이어서 하면 중복될 수 있어요.', '홈으로', () => { S.sess = null; scanner.stop(); S.nfcOn = false; S.view = 'home'; render(); });
+      }
+    } else {
+      render();
+      if (why && before !== after) toast(why);
+    }
+  } catch (e) {} finally { refreshing = false; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) liveClose();
+  else { liveOpen(); refresh(''); }
+});
+window.addEventListener('focus', () => refresh(''));
+
 async function load() {
   S.view = 'loading'; render();
   try {
-    D = await apiGet('bootstrap');
-    if (!D.version || D.version < 3) throw new Error('Apps Script가 예전 버전이에요. Apps Script에서 새 코드 붙여넣고 [배포 관리 → 편집 → 새 버전]으로 배포해줘.');
-    D.events = D.events || []; D.today = D.today || new Date().toISOString().slice(0, 10);
-    G = {}; BAG_OF_CASE = {};
-    D.gear.forEach(g => { G[g.id] = g; if (g.cat === '가방' && g.box) BAG_OF_CASE[g.box] = g.id; });
+    applyData(await apiGet('bootstrap'));
     const saved = store.get('shoot', null);
     const sv = saved ? D.shoots.find(s => s.id === saved.id) : null;
     // 고른 촬영은 날짜가 지나고 철수까지 끝나면 자동으로 해제
     S.shoot = sv && !(sv.returnedAt && sv.date < D.today) && !(sv.date < D.today && !sv.departedAt) ? sv : null;
     S.view = S.who ? 'home' : 'who';
+    liveOpen();
   } catch (e) {
     S.view = 'error'; S.error = e.message;
   }
@@ -10522,7 +10571,7 @@ const NTFY_TOPIC = 'pg-gear-e7lorzvrhx2v8q';
 async function pushNotify(title, message, type, alert) {
   try {
     const url = 'https://ntfy.sh/' + NTFY_TOPIC + '?title=' + encodeURIComponent(title) +
-      '&tags=' + (type === '출발' ? 'truck' : 'house') + '&priority=' + (alert ? 4 : 3);
+      '&tags=' + (type === '출발' ? 'truck' : 'house') + ',from-' + DEVICE + '&priority=' + (alert ? 4 : 3);
     const r = await fetch(url, { method: 'POST', body: message });
     return r.ok ? true : r.status;
   } catch (e) { return e.message || 'network'; }
