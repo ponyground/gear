@@ -6,6 +6,9 @@
 <meta name="theme-color" content="#F6F5F1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="PG Gear">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
 <title>ponyground gear</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,500;0,700;1,800;1,900&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
@@ -10758,6 +10761,7 @@ function confirmSheet(title, body, okLabel, onOk) {
   });
 }
 
+if ('serviceWorker' in navigator && location.protocol === 'https:') { navigator.serviceWorker.register('sw.js').catch(() => {}); }
 window.__test = { onCode, get S() { return S; }, get D() { return D; } };
 load();
 </script>
