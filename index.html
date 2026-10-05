@@ -10217,12 +10217,14 @@ async function load() {
   S.view = 'loading'; render();
   try {
     D = await apiGet('bootstrap');
-    if (!D.version) throw new Error('Apps Script가 예전 버전이에요. Apps Script에서 새 코드 붙여넣고 [배포 관리 → 편집 → 새 버전]으로 배포해줘.');
+    if (!D.version || D.version < 3) throw new Error('Apps Script가 예전 버전이에요. Apps Script에서 새 코드 붙여넣고 [배포 관리 → 편집 → 새 버전]으로 배포해줘.');
     D.events = D.events || []; D.today = D.today || new Date().toISOString().slice(0, 10);
     G = {}; BAG_OF_CASE = {};
     D.gear.forEach(g => { G[g.id] = g; if (g.cat === '가방' && g.box) BAG_OF_CASE[g.box] = g.id; });
     const saved = store.get('shoot', null);
-    S.shoot = saved && saved.date === D.today ? (D.shoots.find(s => s.id === saved.id) || null) : null;
+    const sv = saved ? D.shoots.find(s => s.id === saved.id) : null;
+    // 고른 촬영은 날짜가 지나고 철수까지 끝나면 자동으로 해제
+    S.shoot = sv && !(sv.returnedAt && sv.date < D.today) && !(sv.date < D.today && !sv.departedAt) ? sv : null;
     S.view = S.who ? 'home' : 'who';
   } catch (e) {
     S.view = 'error'; S.error = e.message;
@@ -10545,8 +10547,11 @@ function renderWho() {
 
 function renderHome() {
   const sh = S.shoot, st = shootStatus(sh);
-  const d = new Date(D.today + 'T00:00:00');
+  const sd = sh ? sh.date : D.today;
+  const d = new Date(sd + 'T00:00:00');
   const dow = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][d.getDay()];
+  const dd = Math.round((d - new Date(D.today + 'T00:00:00')) / 86400000);
+  const when = dd === 0 ? 'TODAY' : dd === 1 ? 'TOMORROW' : dd > 0 ? 'D-' + dd : 'D+' + (-dd);
   const lf = lastFinished(), ol = oftenLeft();
   let cta = '', status = '';
   if (st === 'none') { status = '오늘 촬영을 골라주세요'; cta = '<button class="cta" id="go"><span>촬영 고르기</span>' + arrow() + '</button>'; }
@@ -10554,7 +10559,7 @@ function renderHome() {
   else if (st === 'out') { status = '촬영 중 · ' + recs(sh.id, '출발').filter(r => !isBag(r.gearId)).length + '개 출발'; cta = '<button class="cta soft" id="addmore" style="margin-bottom:8px"><span>+ 출발 장비 추가</span><small>철수 전까지 가능</small></button><button class="cta" id="go"><span>철수 체크 시작</span>' + arrow() + '</button>'; }
   else { const m = missingOf(sh); status = '철수 완료 · ' + (m.length ? m.length + '개 못 찾음' : '0 MISSING'); cta = '<button class="cta soft" id="pick2"><span>다른 촬영 고르기</span></button>'; }
   $app.innerHTML = topbar('<button class="chip" id="whoBtn"><span class="dot"></span>GEAR · ' + esc(S.who) + '</button>') +
-    '<div class="lab" style="margin-top:32px">' + dow + ' ' + D.today.slice(5).replace('-', '.') + ' · TODAY</div>' +
+    '<div class="lab" style="margin-top:32px">' + dow + ' ' + sd.slice(5).replace('-', '.') + ' · ' + when + '</div>' +
     '<h1>' + esc(sh ? sh.name : '촬영 없음') + '</h1>' +
     '<div class="sub">' + esc(status) + (sh ? ' · <button class="linkbtn" id="pick" style="padding:0">바꾸기</button>' : '') + '</div>' +
     (st === 'ready' || st === 'out'
@@ -10587,19 +10592,29 @@ function statCard(n, lab, txt) {
 }
 function arrow() { return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FF4A1C" stroke-width="2.4" stroke-linecap="square" aria-hidden="true"><path d="M4 12h15"></path><path d="M13 6l6 6-6 6"></path></svg>'; }
 
+function dateLabel(ds) {
+  const d = new Date(ds + 'T00:00:00');
+  const dd = Math.round((d - new Date(D.today + 'T00:00:00')) / 86400000);
+  const dow = ['일', '월', '화', '수', '목', '금', '토'][d.getDay()];
+  return (d.getMonth() + 1) + '/' + d.getDate() + ' (' + dow + ')' + (dd === 0 ? ' · 오늘' : dd === 1 ? ' · 내일' : ' · D-' + dd);
+}
 function renderPick() {
-  const todays = D.shoots.filter(s => s.date === D.today);
-  const evs = D.events.filter(e => !todays.some(s => s.calId === e.calId));
-  $app.innerHTML = topbar('<button class="chip" id="back">← BACK</button>') +
-    '<div class="lab" style="margin-top:32px">오늘 촬영</div><h1>어떤 촬영이야?</h1>' +
-    '<div style="margin-top:16px">' +
-    todays.map(s => '<button class="opt" data-sid="' + s.id + '"><span>' + esc(s.name) + '</span><span class="lab">' + ({ ready: 'READY', out: 'OUT', done: 'DONE' }[shootStatus(s)]) + '</span></button>').join('') +
-    evs.map((e, i) => '<button class="opt" data-ev="' + i + '"><span>' + esc(e.title) + '</span><span class="lab">' + (e.allDay ? 'ALL DAY' : e.start) + '</span></button>').join('') +
+  // 오늘 이후 촬영 + 아직 철수 안 끝난 지난 촬영(출발한 것)
+  const mine = D.shoots.filter(s => s.date >= D.today || (s.departedAt && !s.returnedAt));
+  const evs = D.events.filter(e => !mine.some(s => s.calId && s.calId === e.calId && s.date === e.date));
+  const rows = mine.map(s => ({ date: s.date, html: '<button class="opt" data-sid="' + s.id + '"><span>' + esc(s.name) + '</span><span class="lab">' + ({ ready: 'READY', out: 'OUT', done: 'DONE' }[shootStatus(s)]) + '</span></button>' }))
+    .concat(evs.map((e, i) => ({ date: e.date, html: '<button class="opt" data-ev="' + i + '"><span>' + esc(e.title) + '</span><span class="lab">' + (e.allDay ? 'ALL DAY' : e.start) + '</span></button>' })))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  let lastDate = '', list = '';
+  rows.forEach(r => { if (r.date !== lastDate) { list += '<div class="lab" style="margin-top:18px">' + esc(dateLabel(r.date)) + '</div>'; lastDate = r.date; } list += r.html; });
+  $app.innerHTML = topbar('<button class="chip" id="back" style="font-size:13px;padding:12px 0">← BACK</button>') +
+    '<div class="lab" style="margin-top:32px">다가오는 촬영 · ' + (D.days || 30) + '일</div><h1>어떤 촬영이야?</h1>' +
+    '<div style="margin-top:4px">' + list + '</div>' +
     (D.eventsError ? '<div class="err">캘린더를 못 읽었어요: ' + esc(D.eventsError) + '<br>Apps Script 편집기에서 authorize 함수를 한 번 실행해서 권한을 허용해줘.</div>' : '') +
-    (todays.length + evs.length === 0 && !D.eventsError ? '<div class="sub">오늘 캘린더에 일정이 없어요</div>' : '') +
-    '</div>' +
-    '<div class="lab" style="margin-top:24px">직접 입력</div>' +
-    '<div style="display:flex;gap:8px;margin-top:8px"><input type="text" id="nm" placeholder="촬영명"><button class="cta" style="width:auto;min-height:0;padding:0 18px" id="mk">추가</button></div>' +
+    (!rows.length && !D.eventsError ? '<div class="sub">다가오는 촬영 일정이 없어요</div>' : '') +
+    '<div class="lab" style="margin-top:28px">직접 입력</div>' +
+    '<div style="display:flex;gap:8px;margin-top:8px"><input type="text" id="nm" placeholder="촬영명" style="flex:1"><input type="date" id="dt" value="' + D.today + '" style="font:inherit;font-size:15px;padding:12px;border:1.5px solid var(--ink);background:#fff;border-radius:0"></div>' +
+    '<button class="cta" style="margin-top:8px" id="mk"><span>추가</span></button>' +
     '<div class="err" id="perr"></div>';
   document.getElementById('back').onclick = () => { S.view = 'home'; render(); };
   const choose = sh => { S.shoot = sh; store.set('shoot', { id: sh.id, date: sh.date }); S.view = 'home'; render(); };
@@ -10607,13 +10622,13 @@ function renderPick() {
   const open = async body => {
     document.getElementById('perr').textContent = '';
     try {
-      const j = await apiPost(Object.assign({ action: 'openShoot', date: D.today }, body));
+      const j = await apiPost(Object.assign({ action: 'openShoot' }, body));
       if (!D.shoots.some(s => s.id === j.shoot.id)) D.shoots.unshift(j.shoot);
       choose(j.shoot);
     } catch (e) { document.getElementById('perr').textContent = '저장 실패: ' + e.message; }
   };
-  $app.querySelectorAll('[data-ev]').forEach(b => b.onclick = () => { const e = evs[+b.dataset.ev]; open({ name: e.title, calId: e.calId }); });
-  document.getElementById('mk').onclick = () => { const n = document.getElementById('nm').value.trim(); if (n) open({ name: n }); };
+  $app.querySelectorAll('[data-ev]').forEach(b => b.onclick = () => { const e = evs[+b.dataset.ev]; open({ name: e.title, calId: e.calId, date: e.date }); });
+  document.getElementById('mk').onclick = () => { const n = document.getElementById('nm').value.trim(); const dt = document.getElementById('dt').value || D.today; if (n) open({ name: n, date: dt }); };
 }
 
 function scanBar(defaultMsg) {
