@@ -10707,6 +10707,7 @@ function renderDone(sh, dow, sd, when) {
     '<div><span style="color:var(--mute)">철수</span><b>' + esc(recLine(firstRec(sh, '철수'), sh) + wrapNote) + '</b></div>' +
     (miss.length ? '' : '<div><span style="color:var(--mute)">못 찾은 장비</span><b>0개</b></div>') +
     '</div>' +
+    gearList(sh, backSet) +
     '<div class="grow"></div><div class="dock"><button class="cta soft" id="pick2" style="color:var(--ink)"><span>다음 촬영 고르기</span><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="2.4" stroke-linecap="square" aria-hidden="true"><path d="M4 12h15"></path><path d="M13 6l6 6-6 6"></path></svg></button></div>';
   document.getElementById('pick2').onclick = () => { S.view = 'pick'; render(); };
   const f = document.getElementById('found'); if (f) f.onclick = () => { S.sess = newReturn(true); S.view = 'return'; render(); startCam(); };
@@ -10715,6 +10716,28 @@ function renderDone(sh, dow, sd, when) {
   });
 }
 
+// 촬영 종료 화면 — 출발 때 가져간 장비를 가방별로 (회수 ✓ / 못 찾음 빨강)
+function gearList(sh, backSet) {
+  const dep = recs(sh.id, '출발'), order = [], by = {};
+  const seen = new Set();
+  dep.forEach(r => { if (seen.has(r.gearId)) return; seen.add(r.gearId);
+    const b = r.bag || ''; if (!(b in by)) { by[b] = []; order.push(b); }
+    if (r.gearId !== b) by[b].push(r.gearId); });
+  const n = [...seen].filter(id => !isBag(id)).length;
+  if (!order.length) return '';
+  const L = 'font-family:\'Archivo\',sans-serif;font-size:10px;font-weight:700;letter-spacing:.14em';
+  return '<div class="row" style="margin-top:26px;align-items:baseline"><div class="lab">가져간 장비</div><div class="lab">' + n + ' ITEMS · 가방별</div></div>' +
+    '<div class="stack" style="margin-top:8px">' + order.map(b => {
+      const its = by[b], bagMiss = b && seen.has(b) && !backSet.has(b);
+      const m = its.filter(id => !backSet.has(id)).length + (bagMiss ? 1 : 0);
+      const pill = m ? '<span class="pill left">' + m + ' MISSING</span>' : '<span class="pill done">' + its.length + '/' + its.length + ' BACK</span>';
+      return '<div class="card" style="padding:14px 16px 10px"><div class="row" style="padding-bottom:8px;border-bottom:1px solid var(--line);margin-bottom:4px"><div style="font-size:16px;font-weight:700' + (bagMiss ? ';color:var(--sigtext)' : '') + '">' + esc(b ? bagName(b) : '가방 없이') + (bagMiss ? ' <span style="' + L + '">· 가방 MISSING</span>' : '') + '</div>' + pill + '</div>' +
+        its.map(id => backSet.has(id)
+          ? '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;font-size:14px"><span class="box on" style="width:14px;height:14px;flex:0 0 14px">' + chk() + '</span><span>' + esc(name(id)) + '</span></div>'
+          : '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;font-size:14px;font-weight:700;color:var(--sigtext)"><span class="box" style="width:14px;height:14px;flex:0 0 14px;border-color:var(--sigtext)"></span><span>' + esc(name(id)) + '</span><span style="margin-left:auto;' + L + '">MISSING</span></div>').join('') +
+        '</div>';
+    }).join('') + '</div>';
+}
 function statCard(n, lab, txt) {
   return '<div class="card"><div class="big" style="font-size:44px">' + esc(n) + '</div><div class="lab" style="margin-top:10px;font-size:10px">' + lab + '</div><div style="margin-top:2px;font-size:13px">' + esc(txt) + '</div></div>';
 }
