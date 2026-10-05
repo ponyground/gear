@@ -10421,14 +10421,26 @@ async function finish(type, force) {
   }
   S.saving = true; render();
   try {
-    await apiPost({ action: 'finish', shootId: S.shoot.id, type, items, who, summary, alert });
-    toast(type + ' 완료 · 알림 보냄');
+    await apiPost({ action: 'finish', shootId: S.shoot.id, type, items, who, summary, alert, noNotify: true });
+    const sent = await pushNotify(S.shoot.name + ' ' + type + ' 완료 · ' + who, summary, type, alert);
+    toast(type + ' 완료 · ' + (sent === true ? '알림 보냄' : '알림 실패 (' + sent + ')'));
     S.saving = false; S.sess = null;
     scanner.stop(); S.nfcOn = false;
     await load();
   } catch (e) {
     S.saving = false; toast('저장 실패: ' + e.message + ' · 다시 눌러줘'); render();
   }
+}
+
+/* ---------- 알림 (폰에서 ntfy로 직접 전송) ---------- */
+const NTFY_TOPIC = 'pg-gear-e7lorzvrhx2v8q';
+async function pushNotify(title, message, type, alert) {
+  try {
+    const url = 'https://ntfy.sh/' + NTFY_TOPIC + '?title=' + encodeURIComponent(title) +
+      '&tags=' + (type === '출발' ? 'truck' : 'house') + '&priority=' + (alert ? 4 : 3);
+    const r = await fetch(url, { method: 'POST', body: message });
+    return r.ok ? true : r.status;
+  } catch (e) { return e.message || 'network'; }
 }
 
 /* ---------- 화면 ---------- */
