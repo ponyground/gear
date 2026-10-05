@@ -15,11 +15,17 @@
   html,body{background:var(--bg);color:var(--ink)}
   body{font-family:'IBM Plex Sans KR',-apple-system,sans-serif;min-height:100vh}
   button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer}
-  .app{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;padding:calc(env(safe-area-inset-top) + 20px) 20px calc(env(safe-area-inset-bottom) + 20px)}
+  .app{max-width:480px;margin:0 auto;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;padding:calc(env(safe-area-inset-top) + 8px) 20px 0}
+  /* 하단 버튼은 화면 아래에 항상 붙어 있게 (아이폰 주소창·홈바에 안 가려지게) */
+  .dock{position:sticky;bottom:0;z-index:5;background:var(--bg);margin:0 -20px;padding:10px 20px calc(env(safe-area-inset-bottom) + 12px);display:flex;flex-direction:column;gap:8px;box-shadow:0 -1px 0 var(--line)}
+  .dock .cta{margin:0!important}
   .en{font-family:'Archivo',sans-serif}
   .lab{font-family:'Archivo',sans-serif;font-size:11px;font-weight:700;letter-spacing:.16em;color:var(--mute)}
   .top{display:flex;justify-content:space-between;align-items:center;min-height:32px}
   .top img{height:17px;display:block}
+  .back{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 16px 0 12px;border:1.5px solid var(--ink);background:var(--card);font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;letter-spacing:.08em}
+  .back svg{flex:0 0 18px}
+  .top .logo{background:none;border:0;padding:8px 8px 8px 0;margin-left:0;cursor:pointer}
   .chip{display:flex;align-items:center;gap:6px;font-family:'Archivo',sans-serif;font-size:11px;font-weight:700;letter-spacing:.14em;padding:8px 0}
   .dot{width:6px;height:6px;border-radius:3px;background:var(--ink)}
   h1{font-size:32px;font-weight:700;letter-spacing:-.03em;line-height:1.15;margin-top:6px}
@@ -10521,18 +10527,37 @@ async function pushNotify(title, message, type, alert) {
 
 /* ---------- 화면 ---------- */
 function topbar(right) {
-  return '<div class="top"><img src="' + LOGO + '" alt="ponyground">' + right + '</div>';
+  return '<div class="top"><button class="logo" id="logo" aria-label="처음 화면으로"><img src="' + LOGO + '" alt="ponyground"></button>' + right + '</div>';
 }
+function backBtn(label) {
+  return '<button class="back" id="back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square" aria-hidden="true"><path d="M20 12H5"></path><path d="M11 6l-6 6 6 6"></path></svg>' + label + '</button>';
+}
+// 처음 화면으로 (체크 중이면 확인 먼저)
+function goHome() {
+  if (S.view === 'depart' || S.view === 'return') {
+    confirmSheet('체크를 그만둘까?', '지금까지 찍은 건 저장되지 않아요.', '그만두기', () => { S.sess = null; scanner.stop(); S.nfcOn = false; S.view = S.who ? 'home' : 'who'; render(); });
+  } else if (S.view === 'pick') { S.view = 'home'; render(); }
+  else if (S.view === 'home') { load(); }
+}
+// 브라우저(폰) 뒤로가기를 눌러도 사이트에서 나가지 않고 앱 안에서 이전 화면으로
+try { history.pushState({ pg: 1 }, ''); } catch (e) {}
+window.addEventListener('popstate', () => {
+  if (sheetEl) { closeSheet(); try { history.pushState({ pg: 1 }, ''); } catch (e) {} return; }
+  if (S.view !== 'home' && S.view !== 'who' && S.view !== 'loading' && S.view !== 'error') {
+    goHome(); try { history.pushState({ pg: 1 }, ''); } catch (e) {}
+  }
+});
 function render() {
   const v = S.view;
   if (v === 'loading') $app.innerHTML = topbar('') + '<div class="grow"></div><div class="lab" style="text-align:center">LOADING</div><div class="grow"></div>';
-  else if (v === 'error') $app.innerHTML = topbar('') + '<h1>연결 실패</h1><div class="err">' + esc(S.error) + '</div><div class="grow"></div><button class="cta" id="retry"><span>다시 시도</span></button>';
+  else if (v === 'error') $app.innerHTML = topbar('') + '<h1>연결 실패</h1><div class="err">' + esc(S.error) + '</div><div class="grow"></div><div class="dock"><button class="cta" id="retry"><span>다시 시도</span></button></div>';
   else if (v === 'who') renderWho();
   else if (v === 'home') renderHome();
   else if (v === 'pick') renderPick();
   else if (v === 'depart') renderDepart();
   else if (v === 'return') renderReturn();
   const r = document.getElementById('retry'); if (r) r.onclick = load;
+  const lg = document.getElementById('logo'); if (lg) lg.onclick = goHome;
 }
 
 function renderWho() {
@@ -10571,7 +10596,7 @@ function renderHome() {
     '</div>' +
     '<div class="lab" style="margin-top:22px">자주 놓고 온 장비</div>' +
     '<div class="list" style="margin-top:8px">' + (ol.length ? ol.map(([id, n]) => '<div><span>' + esc(name(id)) + '</span><span class="en" style="font-weight:800;font-style:italic;color:var(--sigtext)">×' + n + '</span></div>').join('') : '<div><span style="color:var(--mute)">아직 없어요</span></div>') + '</div>' +
-    '<div class="grow"></div>' + cta;
+    '<div class="grow"></div><div class="dock">' + cta + '</div>';
   const go = () => {
     if (st === 'none') { S.view = 'pick'; render(); return; }
     if (st === 'ready') { S.sess = newDepart(); S.view = 'depart'; render(); startCam(); }
@@ -10607,7 +10632,7 @@ function renderPick() {
     .sort((a, b) => a.date.localeCompare(b.date));
   let lastDate = '', list = '';
   rows.forEach(r => { if (r.date !== lastDate) { list += '<div class="lab" style="margin-top:18px">' + esc(dateLabel(r.date)) + '</div>'; lastDate = r.date; } list += r.html; });
-  $app.innerHTML = topbar('<button class="chip" id="back" style="font-size:13px;padding:12px 0">← BACK</button>') +
+  $app.innerHTML = topbar(backBtn('BACK')) +
     '<div class="lab" style="margin-top:32px">다가오는 촬영 · ' + (D.days || 30) + '일</div><h1>어떤 촬영이야?</h1>' +
     '<div style="margin-top:4px">' + list + '</div>' +
     (D.eventsError ? '<div class="err">캘린더를 못 읽었어요: ' + esc(D.eventsError) + '<br>Apps Script 편집기에서 authorize 함수를 한 번 실행해서 권한을 허용해줘.</div>' : '') +
@@ -10641,7 +10666,7 @@ function scanBar(defaultMsg) {
 function renderDepart() {
   const m = departModel(), s = S.sess;
   const segN = Math.max(m.total, 1);
-  $app.innerHTML = topbar('<button class="chip" id="back">← ' + (s.add ? 'ADD MORE' : 'DEPARTURE 01/02') + '</button>') +
+  $app.innerHTML = topbar(backBtn(s.add ? '추가 중' : '출발 체크')) +
     '<div class="row" style="margin-top:20px;align-items:flex-end"><div><div class="sub" style="margin:0">' + (s.add ? '추가로 챙기는 중' : '짐 싸는 중') + ' · ' + esc(S.shoot.name) + '</div>' +
     '<div style="display:flex;align-items:baseline;gap:4px;margin-top:2px"><span class="big" style="font-size:88px">' + m.done + '</span><span class="big" style="font-size:30px;color:var(--soft);font-weight:800">/' + m.total + '</span></div></div>' +
     '<div class="lab" style="color:' + (m.left.length ? 'var(--sigtext)' : 'var(--ink)') + ';padding-bottom:8px">' + (m.left.length ? m.left.length + ' LEFT' : (m.total ? 'ALL SET' : 'START')) + '</div></div>' +
@@ -10658,10 +10683,10 @@ function renderDepart() {
     }).join('') +
     (m.loose.length ? '<div class="card"><div class="row"><div style="font-size:17px;font-weight:700">가방 없이</div><span class="pill done">' + m.loose.length + '</span></div><div style="margin-top:10px">' + m.loose.map(i => itemRow(i)).join('') + '</div></div>' : '') +
     (!m.groups.length && !m.loose.length ? '<div class="card" style="color:var(--mute);font-size:14px">아직 찍은 게 없어요</div>' : '') +
-    '</div><div class="grow"></div>' +
+    '</div><div class="grow"></div><div class="dock">' +
     (m.left.length
       ? '<button class="cta soft" id="fin"><span>' + (S.saving ? '저장 중…' : m.left.length + '개 남음 · ' + (s.add ? '추가 저장' : '이대로 출발')) + '</span><small>TAP</small></button>'
-      : '<button class="cta" id="fin"' + (m.total ? '' : ' disabled') + '><span>' + (S.saving ? '저장 중…' : (s.add ? '추가 저장' : '출발 완료')) + '</span>' + arrow() + '</button>');
+      : '<button class="cta" id="fin"' + (m.total ? '' : ' disabled') + '><span>' + (S.saving ? '저장 중…' : (s.add ? '추가 저장' : '출발 완료')) + '</span>' + arrow() + '</button>') + '</div>';
   bindCheckCommon();
   $app.querySelectorAll('[data-it]').forEach(b => b.onclick = () => { const id = b.dataset.it;
     if (S.sess.assigned[id] === undefined) { manualDepart(id, b.dataset.in); return; } if (S.sess.prior[id]) { toast('이미 저장된 장비예요'); return; } moveItem(id); });
@@ -10679,7 +10704,7 @@ function chk() { return '<svg width="10" height="10" viewBox="0 0 12 12" fill="n
 
 function renderReturn() {
   const m = returnModel(), s = S.sess;
-  $app.innerHTML = topbar('<button class="chip" id="back">← WRAP UP 02/02</button>') +
+  $app.innerHTML = topbar(backBtn('철수 체크')) +
     '<h1 style="margin-top:20px">철수 확인</h1>' +
     '<div class="sub" style="display:flex;gap:8px;align-items:center"><span>출발 ' + m.total + '개</span><span>→</span><b style="color:var(--ink)">지금 ' + m.now + '개</b></div>' +
     scanBar('가방을 찍으면 태그 없는 장비는 같이 회수돼요') +
@@ -10689,10 +10714,10 @@ function renderReturn() {
       : '<div class="card" style="margin-top:20px"><div class="big" style="font-size:56px">0</div><div class="lab" style="margin-top:8px">MISSING · 전부 회수</div></div>') +
     '<div class="lab" style="margin-top:20px">CASES</div><div class="stack" style="margin-top:8px">' +
     m.groups.map(g => '<div class="card row" style="padding:15px 16px"><div style="font-size:16px;font-weight:700">' + esc(bagName(g.bag)) + '</div>' + (g.left ? '<span class="pill left">' + g.left + ' LEFT</span>' : '<span class="pill done">BACK</span>') + '</div>').join('') +
-    '</div><div class="grow"></div>' +
+    '</div><div class="grow"></div><div class="dock">' +
     (m.miss.length
       ? '<button class="cta soft" id="fin"><span>' + (S.saving ? '저장 중…' : m.miss.length + '개 찾아야 완료') + '</span><small>확인 후 완료</small></button>'
-      : '<button class="cta" id="fin"><span>' + (S.saving ? '저장 중…' : '철수 완료') + '</span>' + arrow() + '</button>');
+      : '<button class="cta" id="fin"><span>' + (S.saving ? '저장 중…' : '철수 완료') + '</span>' + arrow() + '</button>') + '</div>';
   bindCheckCommon();
   $app.querySelectorAll('[data-man]').forEach(b => b.onclick = () => manualReturn(b.dataset.man));
   document.getElementById('fin').onclick = () => {
@@ -10703,7 +10728,7 @@ function renderReturn() {
 }
 
 function bindCheckCommon() {
-  document.getElementById('back').onclick = () => confirmSheet('체크를 그만둘까?', '지금까지 찍은 건 저장되지 않아요.', '그만두기', () => { S.sess = null; scanner.stop(); S.nfcOn = false; S.view = 'home'; render(); });
+  document.getElementById('back').onclick = goHome;
   const v = document.getElementById('cam'); if (v) scanner.attach(v);
   const n = document.getElementById('nfc'); if (n) n.onclick = () => scanner.startNfc();
   const u = document.getElementById('undo'); if (u) u.onclick = undoLast;
